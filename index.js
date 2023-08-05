@@ -1,6 +1,8 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
+const stripe = require('stripe')('sk_test_51NbrjySGwZt6LGdsrLHyHUSyxVSaDOdSHP9K2bs8ZmohBjSRXyoHBSw1pKNpq6DlqdGkOSGeBKWaYFceOiVFAYm800YgMCdnGt');
+
 
 const app = express();
 const port = 1234
@@ -26,14 +28,52 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  plan: String,
-  interval: String
+  subId: {
+   type: mongoose.Schema.Types.ObjectId,ref : 'Subscription'
+  }
 });
+
+const subSchema = new mongoose.Schema({
+  userId: {
+   type: mongoose.Schema.Types.ObjectId,ref : 'User'
+  },
+  plan: {
+    type: String,
+    required: true
+  },
+  interval: {
+    type: String,
+    required: true
+  }, 
+});
+
+const calculateAmount = (plan,interval)=>{
+
+  const period = (interval=='Monthly') ? 1 : 10 ;
+  let amount =0;
+  if(plan== "Basic"){
+    amount = period * 100;
+    
+  }
+  else if( plan=='Standard'){
+    amount = period * 200;
+  }
+  else if( plan=='Premium'){
+    amount = period * 500;
+  }
+  else if(plan == 'Regular'){
+    amount = period * 700;
+  }
+  return amount;
+}
+
+
 const User = mongoose.model('User', userSchema);
+const Subscription = mongoose.model('Subscription', subSchema);
 
 const userAuthenticate = async (req,res,next)=>{
   try{    
-    const user = await User.findOne({email:req.body.email, password:req.body.password})   
+    const user = await User.findOne({email:req.headers.email, password:req.headers.password})   
     if(user){
       req.user = user;
       next();
@@ -70,15 +110,29 @@ app.post('/login',userAuthenticate,(req,res)=>{
 
 app.post('/subscribe',userAuthenticate,async(req,res)=>{
   try{   
-    req.user.plan = req.body.plan;;
-    req.user.interval = req.body.interval;    
+    const sub = new Subscription({userId: req.user._id,plan:req.body.plan,interval:req.body.interval})
+    await sub.save();
+    req.user.subId = sub._id;
     const user = await User.findByIdAndUpdate(req.user._id,req.user);
     res.status(200).json({success:true,msg:"Subcription successful"});
   }catch(err){
-
      res.status(500).json({success: false, err: err});
   }
 })
+
+app.get('/secret',userAuthenticate ,async (req, res) => {
+  const sub = await Subscription.findById(req.user.subId);  
+  const amount = calculateAmount(sub.plan,sub.interval);  
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: amount,
+    currency: 'inr',
+    automatic_payment_methods: {
+      enabled: true,
+    },
+  })
+  
+  res.json({client_secret: paymentIntent.client_secret});
+});
 
 
 app.listen(port, () => {
